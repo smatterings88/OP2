@@ -34,7 +34,7 @@ const Chat: React.FC = () => {
     setIsLoading(true);
 
     try {
-      const response = await fetch('/.netlify/functions/chat', {
+      const response = await fetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -43,15 +43,13 @@ const Chat: React.FC = () => {
       });
 
       if (!response.ok) {
-        throw new Error(
-          `Server error (${response.status}). Please ensure Netlify Dev is running locally or try again later.`
-        );
+        throw new Error('Failed to send message. Please try again.');
       }
 
       const responseText = await response.text();
       
       if (!responseText) {
-        throw new Error('Empty response from chat function');
+        throw new Error('No response received');
       }
 
       let data;
@@ -59,7 +57,7 @@ const Chat: React.FC = () => {
         data = JSON.parse(responseText);
       } catch (parseError) {
         console.error('JSON parse error:', parseError);
-        throw new Error('Invalid response format from server');
+        throw new Error('Invalid response format');
       }
 
       if (data.error) {
@@ -73,14 +71,14 @@ const Chat: React.FC = () => {
         };
         addMessage(assistantMessage);
       } else {
-        throw new Error('Invalid response format from chat function');
+        throw new Error('Invalid response format');
       }
     } catch (error) {
       console.error('Chat error:', error);
       setError(error instanceof Error ? error.message : 'An unexpected error occurred');
       addMessage({
         role: 'assistant',
-        content: 'Sorry, I encountered an error. Please try again later.'
+        content: 'Sorry, I encountered an error. Please try again.'
       });
     } finally {
       setIsLoading(false);
