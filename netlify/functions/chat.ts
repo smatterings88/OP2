@@ -13,7 +13,7 @@ const handler: Handler = async (event) => {
     return { 
       statusCode: 204, 
       headers, 
-      body: JSON.stringify({}) // Ensure even OPTIONS returns valid JSON
+      body: JSON.stringify({})
     };
   }
 
@@ -44,17 +44,6 @@ const handler: Handler = async (event) => {
         headers,
         body: JSON.stringify({ 
           error: 'OpenAI API key is not configured. Please check your environment variables.' 
-        }),
-      };
-    }
-
-    if (!process.env.OPENAI_ASSISTANT_ID) {
-      console.error('Missing OPENAI_ASSISTANT_ID environment variable');
-      return {
-        statusCode: 500,
-        headers,
-        body: JSON.stringify({ 
-          error: 'OpenAI Assistant ID is not configured. Please check your environment variables.' 
         }),
       };
     }
@@ -95,140 +84,103 @@ const handler: Handler = async (event) => {
       };
     }
 
-    // Create a thread
-    const thread = await openai.beta.threads.create();
-    console.log('Created thread:', thread.id);
-
-    // Add the user's message to the thread
-    const threadMessage = await openai.beta.threads.messages.create(thread.id, {
-      role: 'user',
-      content: latestMessage.content,
-    });
-    console.log('Added message to thread:', threadMessage.id);
-
-    // Run the assistant with function definitions
-    const run = await openai.beta.threads.runs.create(thread.id, {
-      assistant_id: process.env.OPENAI_ASSISTANT_ID,
-      tools: [{
-        type: 'function',
-        function: {
-          name: 'saveContact',
-          description: 'Save user contact via Netlify function',
-          parameters: {
-            type: 'object',
-            required: ['from_name', 'from_email', 'service_category', 'budget', 'project_details'],
-            properties: {
-              from_name: {
-                type: 'string',
-                description: 'Full name of the user'
-              },
-              from_email: {
-                type: 'string',
-                description: 'User\'s email address'
-              },
-              phone: {
-                type: 'string',
-                description: '(Optional) User\'s phone number'
-              },
-              service_category: {
-                type: 'string',
-                description: 'e.g. \'chat_inquiry\''
-              },
-              budget: {
-                type: 'string',
-                description: 'e.g. \'not_specified\''
-              },
-              project_details: {
-                type: 'string',
-                description: 'Full chat message or project details'
-              },
-              message: {
-                type: 'string',
-                description: '(Optional) Same as project_details'
-              }
+    // Call the Chat Completions API
+    const completion = await openai.chat.completions.create({
+      model: 'gpt-4',
+      messages,
+      functions: [{
+        name: 'saveContact',
+        description: 'Save user contact via Netlify function',
+        parameters: {
+          type: 'object',
+          required: ['from_name', 'from_email', 'service_category', 'budget', 'project_details'],
+          properties: {
+            from_name: {
+              type: 'string',
+              description: 'Full name of the user'
+            },
+            from_email: {
+              type: 'string',
+              description: 'User\'s email address'
+            },
+            phone: {
+              type: 'string',
+              description: '(Optional) User\'s phone number'
+            },
+            service_category: {
+              type: 'string',
+              description: 'e.g. \'chat_inquiry\''
+            },
+            budget: {
+              type: 'string',
+              description: 'e.g. \'not_specified\''
+            },
+            project_details: {
+              type: 'string',
+              description: 'Full chat message or project details'
+            },
+            message: {
+              type: 'string',
+              description: '(Optional) Same as project_details'
             }
           }
         }
-      }]
+      }],
+      function_call: 'auto'
     });
-    console.log('Started run:', run.id);
 
-    // Wait for the run to complete
-    let runStatus = await openai.beta.threads.runs.retrieve(thread.id, run.id);
-    let attempts = 0;
-    const maxAttempts = 30; // Maximum 30 seconds wait
+    const message = completion.choices[0].message;
 
-    while (runStatus.status === 'queued' || runStatus.status === 'in_progress') {
-      if (attempts >= maxAttempts) {
-        console.error('Assistant response timeout after', maxAttempts, 'seconds');
-        return {
-          statusCode: 504,
-          headers,
-          body: JSON.stringify({ error: 'Assistant response timeout' }),
-        };
-      }
-      await new Promise(resolve => setTimeout(resolve, 1000));
-      runStatus = await openai.beta.threads.runs.retrieve(thread.id, run.id);
-      attempts++;
-      console.log('Run status check attempt', attempts, ':', runStatus.status);
-    }
+    // Handle function calls
+    if (message.function_call) {
+      const args = JSON.parse(message.function_call.arguments);
+      
+      // Call the saveContact function
+      const saveResponse = await fetch('/.netlify/functions/saveContact', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(args)
+      });
 
-    console.log('Run completed with status:', runStatus.status);
-
-    if (runStatus.status === 'completed') {
-      // Get the assistant's response
-      const messages = await openai.beta.threads.messages.list(thread.id);
-      const lastMessage = messages.data[0];
-
-      if (!lastMessage || !lastMessage.content[0]?.text?.value) {
-        console.error('No response content from assistant');
+      if (!saveResponse.ok) {
+        console.error('Failed to save contact:', await saveResponse.text());
         return {
           statusCode: 500,
           headers,
-          body: JSON.stringify({ error: 'No response content from assistant' }),
+          body: JSON.stringify({ error: 'Failed to save contact information' })
         };
       }
 
-      // Check if there's a function call
-      if (runStatus.required_action?.type === 'submit_tool_outputs') {
-        const toolCall = runStatus.required_action.submit_tool_outputs.tool_calls[0];
-        
-        if (toolCall.function.name === 'saveContact') {
-          const args = JSON.parse(toolCall.function.arguments);
-          
-          // Call the saveContact function
-          const saveResponse = await fetch('/.netlify/functions/saveContact', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(args)
-          });
+      const saveResult = await saveResponse.json();
 
-          if (!saveResponse.ok) {
-            console.error('Failed to save contact:', await saveResponse.text());
+      // Continue the chat with the function result
+      const followUp = await openai.chat.completions.create({
+        model: 'gpt-4',
+        messages: [
+          ...messages,
+          message,
+          {
+            role: 'function',
+            name: message.function_call.name,
+            content: JSON.stringify(saveResult)
           }
-        }
-      }
+        ]
+      });
 
       return {
         statusCode: 200,
         headers,
-        body: JSON.stringify({
-          choices: [{
-            message: {
-              role: 'assistant',
-              content: lastMessage.content[0].text.value
-            }
-          }]
-        }),
-      };
-    } else {
-      console.error('Run failed with status:', runStatus.status);
-      return {
-        statusCode: 500,
-        headers,
-        body: JSON.stringify({ error: `Run failed with status: ${runStatus.status}` }),
+        body: JSON.stringify({ choices: [followUp.choices[0]] })
       };
     }
+
+    // Return the assistant's reply when no function call
+    return {
+      statusCode: 200,
+      headers,
+      body: JSON.stringify({ choices: [completion.choices[0]] })
+    };
+
   } catch (error) {
     console.error('Chat function error:', error);
     return {
