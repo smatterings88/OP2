@@ -1,10 +1,10 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Send, Loader2 } from 'lucide-react';
+import { Send, Loader2, Trash2 } from 'lucide-react';
 import { marked } from 'marked';
 import { useChat } from '../contexts/ChatContext';
 
 const Chat: React.FC = () => {
-  const { messages, addMessage } = useChat();
+  const { messages, addMessage, clearChat } = useChat();
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -87,10 +87,26 @@ const Chat: React.FC = () => {
     }
   };
 
+  const handleClearChat = () => {
+    clearChat();
+    setInput('');
+    setError(null);
+    inputRef.current?.focus();
+  };
+
   return (
     <div className="flex flex-col h-[500px] bg-white rounded-xl shadow-lg border border-secondary-200">
-      <div className="p-4 border-b border-secondary-200">
+      <div className="p-4 border-b border-secondary-200 flex justify-between items-center">
         <h3 className="text-lg font-semibold text-secondary-900">Chat with Us</h3>
+        {messages.length > 0 && (
+          <button
+            onClick={handleClearChat}
+            className="text-secondary-500 hover:text-secondary-700 transition-colors p-2 rounded-lg hover:bg-secondary-50"
+            title="Clear chat"
+          >
+            <Trash2 size={20} />
+          </button>
+        )}
       </div>
       
       <div className="flex-1 overflow-y-auto p-4 space-y-4 bg-secondary-50">
